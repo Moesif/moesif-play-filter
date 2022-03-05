@@ -38,21 +38,34 @@ class MoesifApiFilter @Inject()(config: MoesifApiFilterConfig)(implicit mat: Mat
   private val eventModelBuffer = mutable.ArrayBuffer[EventModel]()
   private val client = new MoesifAPIClient(moesifApplicationId, moesifCollectorEndpoint)
   private val moesifApi = client.getAPI
+  // App Config and Governance Rule refresh frequency in seconds
+  private val RefreshInterval = 300
+  // App Config load and refresh tracking
   private var lastTimeAppConfigFetched: DateTime = DateTime.parse("1970-01-01", DateTimeFormat.forPattern("yyyy-MM-dd"))
   private var isAppConfigFetched: Boolean = false
   private var appConfigModel = new AppConfigModel
+  // Governance Rules, refresh schedule managed by ScheduledExecutorService
+  private var governanceRules: Seq[GovernanceRulesModel] = Seq()
 
   val appConfigRunnable: Runnable = new Runnable() {
     override def run(): Unit = {
       getApplicationConfig()
     }
   }
+
+  val governanceRunnable: Runnable = new Runnable() {
+    override def run(): Unit = {
+      getGovernanceRules()
+    }
+  }
+
   val eventBufferFlusher: Runnable = new Runnable() {
     override def run(): Unit = flushEventBuffer()
   }
   // Create an executor to fetch application config every 5 minutes
-  val exec: ScheduledExecutorService = Executors.newScheduledThreadPool(1)
-  exec.scheduleAtFixedRate(appConfigRunnable, 0, 5, TimeUnit.MINUTES)
+  val exec: ScheduledExecutorService = Executors.newScheduledThreadPool(2)
+  exec.scheduleAtFixedRate(appConfigRunnable, 0, RefreshInterval, TimeUnit.SECONDS)
+  exec.scheduleAtFixedRate(governanceRunnable, 0, RefreshInterval, TimeUnit.SECONDS)
   // Initialize with a ScheduledFuture[_] that fires immediately, doing nothing
   private var scheduledSend: ScheduledFuture[_] = exec.schedule(eventBufferFlusher, 0, TimeUnit.MILLISECONDS)
 
@@ -65,7 +78,7 @@ class MoesifApiFilter @Inject()(config: MoesifApiFilterConfig)(implicit mat: Mat
 
   def getApplicationConfig() = {
 
-    if (!isAppConfigFetched || DateTime.now(DateTimeZone.UTC).isAfter(lastTimeAppConfigFetched.plusMinutes(5))) {
+    if (!isAppConfigFetched || DateTime.now(DateTimeZone.UTC).isAfter(lastTimeAppConfigFetched.plusSeconds(RefreshInterval))) {
       isAppConfigFetched = true
       lastTimeAppConfigFetched = DateTime.now(DateTimeZone.UTC)
 
@@ -86,6 +99,18 @@ class MoesifApiFilter @Inject()(config: MoesifApiFilterConfig)(implicit mat: Mat
       }
     } else {
       println("No need to fetch app config")
+    }
+  }
+
+  def getGovernanceRules(): Unit = {
+    try {
+      val body = moesifApi.getGovernanceRules().getRawBody
+      governanceRules = APIController.parseGovernanceRulesModel(body).asScala.toList
+      body.close()
+    } catch {
+      case e: Throwable =>
+        println("Error getting governance rules: " + e.getMessage)
+        println(e.printStackTrace())
     }
   }
 
@@ -195,6 +220,8 @@ class MoesifApiFilter @Inject()(config: MoesifApiFilterConfig)(implicit mat: Mat
   def sendEvent(eventModel: EventModel): Unit = synchronized {
       val randomPercentage = Math.random * 100
       val sampleRateToUse = getSampleRateToUse(eventModel.getUserId, eventModel.getCompanyId)
+
+      // Apply governance rules
 
       // Compare percentage to send event
       if (sampleRateToUse >= randomPercentage) {
