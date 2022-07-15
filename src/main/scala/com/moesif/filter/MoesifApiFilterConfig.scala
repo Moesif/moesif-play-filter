@@ -13,15 +13,17 @@ import javax.inject.{Inject, Provider, Singleton}
   * @param maxBatchTime Int of the max time in milliseconds to buffer events before sending
   */
 case class MoesifApiFilterConfig(maxApiEventsToHoldInMemory: Int, moesifApplicationId: String, requestBodyProcessingEnabled: Boolean = true,
-                                 moesifCollectorEndpoint: String, maxBatchTime: Int = 5000 )
+                                 moesifCollectorEndpoint: String, maxBatchTime: Int = 5000 , debug:Boolean = false)
 object MoesifApiFilterConfig {
   def fromConfiguration(conf: Configuration): MoesifApiFilterConfig = {
     val config = conf.get[Configuration]("play.filters.moesifApiFilter")
     val maxApiEventsToHoldInMemory = config.getOptional[Int]("maxApiEventsToHoldInMemory").getOrElse(10)
     val reqBodyProcessing = config.getOptional[Boolean]("requestBodyProcessingEnabled").getOrElse(false)
+    val debug = config.getOptional[Boolean]("debug").getOrElse(false)
+    val maxBatchTime = config.getOptional[Int]("maxBatchTime").getOrElse(5000)
     val moesifApplicationId = config.get[String]("moesifApplicationId")
     val moesifCollectorEndpoint = config.get[String]("collectorEndpoint")
-    MoesifApiFilterConfig(maxApiEventsToHoldInMemory, moesifApplicationId, reqBodyProcessing, moesifCollectorEndpoint)
+    MoesifApiFilterConfig(maxApiEventsToHoldInMemory, moesifApplicationId, reqBodyProcessing, moesifCollectorEndpoint, maxBatchTime, debug)
   }
 }
 

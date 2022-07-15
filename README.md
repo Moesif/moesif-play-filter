@@ -19,7 +19,7 @@ without importing framework specific dependencies. Any Web Application built on 
 For SBT users, add dependency to your `build.sbt`:
 
 ```bash
-libraryDependencies += "com.moesif.filter" % "moesif-play-filter" % "1.14.0"
+libraryDependencies += "com.moesif.filter" % "moesif-play-filter" % "1.15.0"
 ```
 
 For Maven users, add dependency to your `pom.xml`:
@@ -28,7 +28,7 @@ For Maven users, add dependency to your `pom.xml`:
 <dependency>
     <groupId>com.moesif.filter</groupId>
     <artifactId>moesif-play-filter</artifactId>
-    <version>1.14.0</version>
+    <version>1.15.0</version>
 </dependency>
 ```
 
@@ -36,7 +36,7 @@ For Gradle users, add the Moesif dependency to your project's build.gradle file:
 
 ```gradle
 dependencies {   
-    compile 'com.moesif.filter:moesif-play-filter:1.14.0'
+    compile 'com.moesif.filter:moesif-play-filter:1.15.0'
 }
 ```
 
@@ -135,6 +135,9 @@ Moesif automatically detects the end user's session token or API key, but you ca
 #### 6. `def getMetadata(request: RequestHeader, result: Result): Map[String, Object] `
 You can add any additional tags as needed
 to the event. Ensure that returned metadata map is Json serializable
+
+#### 7. `debug`
+(optional) boolean, a flag to see debugging messages.
 
 **The below methods to update user and company are accessible via the Moesif Java API lib which Moesif Play Filter already imports as a dependency.**
 
