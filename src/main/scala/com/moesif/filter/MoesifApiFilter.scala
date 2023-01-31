@@ -200,7 +200,11 @@ class MoesifApiFilter @Inject()(config: MoesifApiFilterConfig)(implicit mat: Mat
       // Compare percentage to send event
       if (sampleRateToUse >= randomPercentage) {
         eventModel.setWeight(math.floor(100 / sampleRateToUse).toInt) // note: sampleRateToUse cannot be 0 at this point
-        eventModelBuffer += eventModel
+        if(eventModelBuffer.size >= maxApiEventsToHoldInMemory){
+          logger.log(Level.WARNING, s"Skipped Event due to event buffer size [${eventModelBuffer.size}] is over max ApiEventsToHoldInMemory ${maxApiEventsToHoldInMemory}")
+        }else{
+          eventModelBuffer += eventModel
+        }
       } else {
         if(debug) {
           logger.log(Level.INFO, "Skipped Event due to sampleRateToUse - " + sampleRateToUse.toString + " and randomPercentage " + randomPercentage.toString)
