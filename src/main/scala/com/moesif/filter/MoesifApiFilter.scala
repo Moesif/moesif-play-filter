@@ -83,15 +83,14 @@ class MoesifApiFilter @Inject()(config: MoesifApiFilterConfig)(implicit mat: Mat
         appConfigModel = newConfig
       } catch {
           case e: Throwable => {
-            println("Exception while fetching application config, setting sample rate to 100")
-            println(e)
-            println(e.getMessage)
-            println(e.printStackTrace())
+            logger.warning(s"Exception while fetching application config, setting sample rate to 100 [${e.getClass.getName}:${e.getMessage}]")
             appConfigModel.setSampleRate(100)
           }
       }
     } else {
-      println("No need to fetch app config")
+      if(debug) {
+        logger.log("No need to fetch app config")
+      }
     }
   }
 
