@@ -137,8 +137,7 @@ class MoesifApiFilter @Inject()(config: MoesifApiFilterConfig)(implicit mat: Mat
               }
 
               val eventModel = eventModelBuilder.build()
-              val eventModelMasked = advancedConfig.maskContent(eventModel)
-              sendEvent(eventModelMasked)
+              sendEvent(eventModel, advancedConfig)
 
             }
           }
@@ -152,14 +151,16 @@ class MoesifApiFilter @Inject()(config: MoesifApiFilterConfig)(implicit mat: Mat
   }
 
 
-  def sendEvent(eventModel: EventModel): Unit = synchronized {
+  def sendEvent(eventModel: EventModel, advancedConfig: MoesifAdvancedFilterConfiguration): Unit = synchronized {
       val randomPercentage = Math.random * 100
       val sampleRateToUse = moesifApi.getSampleRateToUse(eventModel)
 
+      val eventModelMasked = advancedConfig.maskContent(eventModel)
+
       // Compare percentage to send event
       if (sampleRateToUse >= randomPercentage) {
-        eventModel.setWeight(math.floor(100 / sampleRateToUse).toInt) // note: sampleRateToUse cannot be 0 at this point
-        eventModelBuffer += eventModel
+        eventModelMasked.setWeight(math.floor(100 / sampleRateToUse).toInt) // note: sampleRateToUse cannot be 0 at this point
+        eventModelBuffer += eventModelMasked
       } else {
         if(debug) {
           logger.log(Level.INFO, "Skipped Event due to sampleRateToUse - " + sampleRateToUse.toString + " and randomPercentage " + randomPercentage.toString)
@@ -267,12 +268,12 @@ object MoesifApiFilter{
       uri
     }
     else {
-      val protocol = if (secure) "https" else "http"
+      val protocol = if (secure) "https://" else "http://"
 
       // Add "/" if requestHeader.uri(route) is not start with "/"
       val route = if (uri.startsWith("/")) uri else "/" + uri
 
-      protocol + "://" + host + route
+      protocol + host + route
     }
   }
 
