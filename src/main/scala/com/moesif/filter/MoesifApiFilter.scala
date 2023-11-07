@@ -38,7 +38,12 @@ class MoesifApiFilter @Inject()(config: MoesifApiFilterConfig)(implicit mat: Mat
   private val moesifApi = client.getAPI
 
   val eventBufferFlusher: Runnable = new Runnable() {
-    override def run(): Unit = flushEventBuffer()
+    override def run(): Unit = {
+      if(debug){
+        logger.log(Level.INFO, "flush events by scheduler...")
+      }
+      flushEventBuffer()
+    }
   }
   // Create an executor to fetch application config every 5 minutes
   val exec: ScheduledExecutorService = Executors.newScheduledThreadPool(1)
@@ -160,7 +165,11 @@ class MoesifApiFilter @Inject()(config: MoesifApiFilterConfig)(implicit mat: Mat
       // Compare percentage to send event
       if (sampleRateToUse >= randomPercentage) {
         eventModelMasked.setWeight(math.floor(100 / sampleRateToUse).toInt) // note: sampleRateToUse cannot be 0 at this point
-        eventModelBuffer += eventModelMasked
+        if(eventModelBuffer.size >= maxApiEventsToHoldInMemory){
+          logger.log(Level.WARNING, s"Skipped Event due to event buffer size [${eventModelBuffer.size}] is over max ApiEventsToHoldInMemory ${maxApiEventsToHoldInMemory}")
+        }else{
+          eventModelBuffer += eventModelMasked
+        }
       } else {
         if(debug) {
           logger.log(Level.INFO, "Skipped Event due to sampleRateToUse - " + sampleRateToUse.toString + " and randomPercentage " + randomPercentage.toString)
@@ -171,11 +180,13 @@ class MoesifApiFilter @Inject()(config: MoesifApiFilterConfig)(implicit mat: Mat
       // send immediately if that didn't already happen and it's time to send
       // this also has the effect of sending immediately if we are sending fewer than one event per maxBatchTime
       if (eventModelBuffer.size >= maxApiEventsToHoldInMemory || isAfterMaxBatchTime()) {
+        if(debug){
+          logger.log(Level.INFO, s"flush events because of bucket full or time over maxBatchTime [${eventModelBuffer.size}/${maxApiEventsToHoldInMemory}] - [${System.currentTimeMillis() - lastSendTime}/${maxBatchTime}]")
+        }
         flushEventBuffer()
       } else {
         // Send all the events in the buffer in up to maxBatchTime even if no more events are added to the buffer
-        if (!isSendScheduled())
-          scheduleBufferFlush()
+        setScheduleBufferFlush()
       }
   }
 
@@ -188,26 +199,48 @@ class MoesifApiFilter @Inject()(config: MoesifApiFilterConfig)(implicit mat: Mat
     scheduledSend = exec.schedule(eventBufferFlusher, maxBatchTime, TimeUnit.MILLISECONDS)
   }
 
-  def flushEventBuffer(): Unit = synchronized {
+  def setScheduleBufferFlush(): Unit = {
+    if (!isSendScheduled()) {
+      if(debug){
+        logger.log(Level.WARNING, s"Scheduler is set for ${maxBatchTime} later...")
+      }
+      scheduleBufferFlush()
+    }
+  }
+
+  def cancelScheduleBufferFlush(): Unit = {
+    if (isSendScheduled()) {
+      if(debug){
+        logger.log(Level.WARNING, "cancelling schedule to flush events")
+      }
+      scheduledSend.cancel(false)
+    }
+  }
+
+    def flushEventBuffer(): Unit = synchronized {
     if (eventModelBuffer.nonEmpty) {
+      val flushSize = eventModelBuffer.size
       lastSendTime = System.currentTimeMillis()
       val callBack = new APICallBack[HttpResponse] {
         def onSuccess(context: HttpContext, response: HttpResponse): Unit = {
           if (context.getResponse.getStatusCode != 201) {
-            logger.log(Level.WARNING, s"Moesif server returned status:${context.getResponse.getStatusCode} while sending API events")
+            logger.log(Level.WARNING, s"[Moesif] server returned status:${context.getResponse.getStatusCode} while sending API events [${flushSize}/${maxApiEventsToHoldInMemory}]")
+            setScheduleBufferFlush()
+          }
+          else{
+            eventModelBuffer.remove(0, flushSize)
+            // if this was called while a scheduled send task was still live, cancel it because we just sent
+            cancelScheduleBufferFlush()
+            logger.log(Level.INFO, s"[Moesif] sent [${flushSize}/${maxApiEventsToHoldInMemory}] events successfully")
           }
         }
         def onFailure(context: HttpContext, ex: Throwable): Unit = {
-          logger.log(Level.WARNING, s"failed to send API events to Moesif: ${ex.getMessage}", ex)
+          logger.log(Level.WARNING, s"[Moesif] failed to send API events [${flushSize}/${maxApiEventsToHoldInMemory}] to Moesif: ${ex.getMessage}", ex)
+          setScheduleBufferFlush()
         }
       }
       val events = eventModelBuffer.asJava
       moesifApi.createEventsBatchAsync(events, callBack)
-      eventModelBuffer.clear()
-    }
-    // if this was called while a scheduled send task was still live, cancel it because we just sent
-    if (isSendScheduled) {
-      scheduledSend.cancel(false)
     }
   }
 
