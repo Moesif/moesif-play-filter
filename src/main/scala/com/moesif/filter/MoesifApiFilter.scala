@@ -235,7 +235,12 @@ class MoesifApiFilter @Inject()(config: MoesifApiFilterConfig)(implicit mat: Mat
           }
         }
         def onFailure(context: HttpContext, ex: Throwable): Unit = {
-          logger.log(Level.WARNING, s"[Moesif] failed to send API events [${flushSize}/${maxApiEventsToHoldInMemory}] to Moesif: ${ex.getMessage}", ex)
+          if(ex.getMessage.contains("IndexOutOfBoundsException")){
+            logger.log(Level.WARNING, s"[Moesif] failed to send API events [flushSize: ${flushSize}/${maxApiEventsToHoldInMemory}] [ArrayBuffer size: ${eventModelBuffer.size}] to Moesif: ${ex.getMessage}", ex)
+          }
+          else{
+            logger.log(Level.WARNING, s"[Moesif] failed to send API events [${flushSize}/${maxApiEventsToHoldInMemory}] to Moesif: ${ex.getMessage}", ex)
+          }
           setScheduleBufferFlush()
         }
       }
