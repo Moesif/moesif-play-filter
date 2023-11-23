@@ -228,19 +228,31 @@ class MoesifApiFilter @Inject()(config: MoesifApiFilterConfig)(implicit mat: Mat
             setScheduleBufferFlush()
           }
           else{
-            eventModelBuffer.remove(0, flushSize)
+            logger.log(Level.INFO, s"[Moesif] sent [${flushSize}/${maxApiEventsToHoldInMemory}] events successfully")
             // if this was called while a scheduled send task was still live, cancel it because we just sent
             cancelScheduleBufferFlush()
-            logger.log(Level.INFO, s"[Moesif] sent [${flushSize}/${maxApiEventsToHoldInMemory}] events successfully")
+
+            try{
+              eventModelBuffer.remove(0, flushSize)
+            }
+            catch {
+              case ex: Exception =>
+                logger.log(Level.WARNING, s"[Moesif] Error when remove flushed events [flushSize: ${flushSize}/${maxApiEventsToHoldInMemory}] [Current ArrayBuffer size after flushing: ${eventModelBuffer.size}] to Moesif: ${ex.getMessage}", ex)
+            }
+            // TODO remove try exception after debugging on remove out of bounds issue
           }
         }
         def onFailure(context: HttpContext, ex: Throwable): Unit = {
-          if(ex.getMessage.contains("IndexOutOfBoundsException")){
-            logger.log(Level.WARNING, s"[Moesif] failed to send API events [flushSize: ${flushSize}/${maxApiEventsToHoldInMemory}] [ArrayBuffer size: ${eventModelBuffer.size}] to Moesif: ${ex.getMessage}", ex)
+          if(ex.getMessage.contains("failed to respond") || ex.getMessage.contains("api-dev.moesif.net:443")){ // for unirest publishResponse error
+            logger.log(Level.WARNING, s"unirest publishResponse error \n" +
+              s"[Request url-${context.getRequest.getQueryUrl}" +
+              s"|header-${context.getRequest.getHeaders}" +
+              s"|method-${context.getRequest.getHttpMethod}" +
+              s"|param-${context.getRequest.getParameters}], " +
+              s"[Response status-${context.getResponse.getStatusCode}" +
+              s"|header-${context.getResponse.getHeaders}]")
           }
-          else{
-            logger.log(Level.WARNING, s"[Moesif] failed to send API events [${flushSize}/${maxApiEventsToHoldInMemory}] to Moesif: ${ex.getMessage}", ex)
-          }
+          logger.log(Level.WARNING, s"[Moesif] failed to send API events [flushSize: ${flushSize}/${maxApiEventsToHoldInMemory}] [ArrayBuffer size: ${eventModelBuffer.size}] to Moesif: ${ex.getMessage}", ex)
           setScheduleBufferFlush()
         }
       }
