@@ -244,13 +244,19 @@ class MoesifApiFilter @Inject()(config: MoesifApiFilterConfig)(implicit mat: Mat
         }
         def onFailure(context: HttpContext, ex: Throwable): Unit = {
           if(ex.getMessage.contains("failed to respond") || ex.getMessage.contains("api-dev.moesif.net:443")){ // for unirest publishResponse error
+            val queryUrl = Try(context.getRequest.getQueryUrl).getOrElse("NotAvailable")
+            val reqHeaders = Try(context.getRequest.getHeaders).getOrElse("NotAvailable")
+            val resHeaders = Try(context.getResponse.getHeaders).getOrElse("NotAvailable")
+            val method = Try(context.getRequest.getHttpMethod).getOrElse("NotAvailable")
+            val params = Try(context.getRequest.getParameters).getOrElse("NotAvailable")
+            val status = Try(context.getResponse.getStatusCode).getOrElse("NotAvailable")
             logger.log(Level.WARNING, s"unirest publishResponse error \n" +
-              s"[Request url-${context.getRequest.getQueryUrl}" +
-              s"|header-${context.getRequest.getHeaders}" +
-              s"|method-${context.getRequest.getHttpMethod}" +
-              s"|param-${context.getRequest.getParameters}], " +
-              s"[Response status-${context.getResponse.getStatusCode}" +
-              s"|header-${context.getResponse.getHeaders}]")
+              s"[Request url-${queryUrl}" +
+              s"|method-${method}" +
+              s"|param-${params}], " +
+              s"|Req-header-${reqHeaders}" +
+              s"|Resp-header-${resHeaders}]"+
+              s"|Response status-${status}")
           }
           logger.log(Level.WARNING, s"[Moesif] failed to send API events [flushSize: ${flushSize}/${maxApiEventsToHoldInMemory}] [ArrayBuffer size: ${eventModelBuffer.size}] to Moesif: ${ex.getMessage}", ex)
           setScheduleBufferFlush()
