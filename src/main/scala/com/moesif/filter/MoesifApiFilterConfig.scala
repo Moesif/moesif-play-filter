@@ -17,7 +17,7 @@ case class MoesifApiFilterConfig(maxApiEventsToHoldInMemory: Int, moesifApplicat
 object MoesifApiFilterConfig {
   def fromConfiguration(conf: Configuration): MoesifApiFilterConfig = {
     val config = conf.get[Configuration]("play.filters.moesifApiFilter")
-    val maxApiEventsToHoldInMemory = config.getOptional[Int]("maxApiEventsToHoldInMemory").getOrElse(1000)
+    val maxApiEventsToHoldInMemory = config.getOptional[Int]("maxApiEventsToHoldInMemory").getOrElse(200)
     val reqBodyProcessing = config.getOptional[Boolean]("requestBodyProcessingEnabled").getOrElse(false)
     val debug = config.getOptional[Boolean]("debug").getOrElse(false)
     val maxBatchTime = config.getOptional[Int]("maxBatchTime").getOrElse(5000)
