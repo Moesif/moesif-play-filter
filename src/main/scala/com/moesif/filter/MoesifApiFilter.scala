@@ -281,6 +281,8 @@ class MoesifApiFilter @Inject()(config: MoesifApiFilterConfig)(implicit mat: Mat
               logger.log(Level.WARNING, s"Caught a TimeoutException: $ex")
             case APIException =>
               logger.log(Level.WARNING, s"Caught a APIException: $ex")
+            case _ =>
+              logger.log(Level.WARNING, s"Caught other Exception: $ex")
           }
 
           logger.log(Level.WARNING, s"[Moesif] failed to send API events [flushSize: ${flushSize}/${maxApiEventsToHoldInMemory}] [ArrayBuffer size: ${eventModelBuffer.size}] to Moesif: ${ex.getMessage}", ex)
