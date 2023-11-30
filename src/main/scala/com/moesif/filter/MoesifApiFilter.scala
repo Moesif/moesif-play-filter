@@ -7,14 +7,14 @@ import akka.util.ByteString
 import com.moesif.api.http.client.{APICallBack, HttpContext}
 import com.moesif.api.http.response.HttpResponse
 import com.moesif.api.models._
-import com.moesif.api.{Base64, MoesifAPIClient, BodyParser => MoesifBodyParser}
+import com.moesif.api.{APIHelper, Base64, MoesifAPIClient, BodyParser => MoesifBodyParser}
 import play.api.Configuration
 import play.api.inject.{SimpleModule, bind}
 import play.api.libs.streams.Accumulator
 import play.api.mvc.{EssentialAction, EssentialFilter, RequestHeader, Result}
 
 import java.util.Date
-import java.util.concurrent.{Executors, ScheduledExecutorService, ScheduledFuture, TimeUnit}
+import java.util.concurrent.{Executors, ScheduledExecutorService, ScheduledFuture, TimeUnit, TimeoutException}
 import java.util.logging._
 import javax.inject.{Inject, Singleton}
 import scala.collection.JavaConverters._
@@ -217,7 +217,33 @@ class MoesifApiFilter @Inject()(config: MoesifApiFilterConfig)(implicit mat: Mat
     }
   }
 
-    def flushEventBuffer(): Unit = synchronized {
+  def printEventBatchRequestHelper(context: HttpContext): Unit = {
+    logger.log(Level.WARNING, "[moesif] DEBUG events sent ...")
+
+    val queryUrl = Try(context.getRequest.getQueryUrl).getOrElse("NotAvailable")
+    val reqHeaders = Try(context.getRequest.getHeaders).getOrElse("NotAvailable")
+    val resHeaders = Try(context.getResponse.getHeaders).getOrElse("NotAvailable")
+    val method = Try(context.getRequest.getHttpMethod).getOrElse("NotAvailable")
+    val params = Try(context.getRequest.getParameters).getOrElse("NotAvailable")
+    val status = Try(context.getResponse.getStatusCode).getOrElse("NotAvailable")
+    logger.log(Level.WARNING, s"unirest publishResponse error \n" +
+      s"[Request url-${queryUrl}" +
+      s"|method-${method}" +
+      s"|param-${params}], " +
+      s"|Resp-header-${resHeaders}" +
+      s" [Response status-${status}" +
+      s"|Req-header-${reqHeaders}]")
+
+    val eventsPayload = eventModelBuffer.asJava
+    val eventsStr = APIHelper.serialize(eventsPayload)
+    val payloadSizeInBytes = eventsStr.getBytes("UTF-8").length
+
+    //  println(s"Size of List[EventModel]: $sizeInBytes bytes")
+    logger.log(Level.WARNING, s"Request payload: $eventsStr")
+    logger.log(Level.WARNING, s"size in bytes: $payloadSizeInBytes")
+  }
+
+  def flushEventBuffer(): Unit = synchronized {
     if (eventModelBuffer.nonEmpty) {
       val flushSize = eventModelBuffer.size
       lastSendTime = System.currentTimeMillis()
@@ -245,6 +271,11 @@ class MoesifApiFilter @Inject()(config: MoesifApiFilterConfig)(implicit mat: Mat
           }
         }
         def onFailure(context: HttpContext, ex: Throwable): Unit = {
+          if (ex.getMessage.contains("failed to respond") || ex.getMessage.contains("api-dev.moesif.net:443")) { // for unirest publishResponse error
+            printEventBatchRequestHelper(context)
+          }
+//        TODO check time out exception
+
           logger.log(Level.WARNING, s"[Moesif] failed to send API events [flushSize: ${flushSize}/${maxApiEventsToHoldInMemory}] [ArrayBuffer size: ${eventModelBuffer.size}] to Moesif: ${ex.getMessage}", ex)
           setScheduleBufferFlush()
         }
