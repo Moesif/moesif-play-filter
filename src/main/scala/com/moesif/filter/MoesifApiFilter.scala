@@ -4,6 +4,7 @@ import akka.stream.scaladsl.Flow
 import akka.stream.stage.{GraphStage, GraphStageLogic, InHandler, OutHandler}
 import akka.stream.{Attributes, FlowShape, Materializer}
 import akka.util.ByteString
+import com.moesif.api.exceptions.APIException
 import com.moesif.api.http.client.{APICallBack, HttpContext}
 import com.moesif.api.http.response.HttpResponse
 import com.moesif.api.models._
@@ -274,7 +275,13 @@ class MoesifApiFilter @Inject()(config: MoesifApiFilterConfig)(implicit mat: Mat
           if (ex.getMessage.contains("failed to respond") || ex.getMessage.contains("api-dev.moesif.net:443")) { // for unirest publishResponse error
             printEventBatchRequestHelper(context)
           }
-//        TODO check time out exception
+
+          ex match {
+            case TimeoutException =>
+              logger.log(Level.WARNING, s"Caught a TimeoutException: $ex")
+            case APIException =>
+              logger.log(Level.WARNING, s"Caught a APIException: $ex")
+          }
 
           logger.log(Level.WARNING, s"[Moesif] failed to send API events [flushSize: ${flushSize}/${maxApiEventsToHoldInMemory}] [ArrayBuffer size: ${eventModelBuffer.size}] to Moesif: ${ex.getMessage}", ex)
           setScheduleBufferFlush()
