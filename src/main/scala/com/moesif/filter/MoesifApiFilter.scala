@@ -104,21 +104,6 @@ class MoesifApiFilter @Inject()(config: MoesifApiFilterConfig)(implicit mat: Mat
           status(result.header.status).
           headers(resultHeaders)
 
-        result.body.consumeData.map { resultBodyByteString =>
-          val utf8String = resultBodyByteString.utf8String
-
-          Try(MoesifBodyParser.parseBody(resultHeaders, utf8String)) match {
-            case Success(bodyWrapper) if bodyWrapper.transferEncoding == "base64" =>
-              // play bytestring payload seems to be in UTF-16BE, BodyParser converts to UTF string first,
-              // which corrupts the string, use the ByteString bytes directly
-              val str = new String(Base64.encode(resultBodyByteString.toArray, Base64.DEFAULT))
-              eventRspBuilder.body(str).transferEncoding(bodyWrapper.transferEncoding)
-            case Success(bodyWrapper) =>
-              eventRspBuilder.body(bodyWrapper.body).transferEncoding(bodyWrapper.transferEncoding)
-            case _ => eventRspBuilder.body(utf8String)
-          }
-        }
-
         val eventModelBuilder = new EventBuilder().
           request(eventReqWithBody).
           response(eventRspBuilder.build())
@@ -160,6 +145,24 @@ class MoesifApiFilter @Inject()(config: MoesifApiFilterConfig)(implicit mat: Mat
               ),
               body = HttpEntity.Strict(ByteString(eventModel.getResponse.getBody.toString), result.body.contentType)
             ))
+          }
+          else{
+            result.body.consumeData.map { resultBodyByteString =>
+              val utf8String = resultBodyByteString.utf8String
+
+              Try(MoesifBodyParser.parseBody(resultHeaders, utf8String)) match {
+                case Success(bodyWrapper) if bodyWrapper.transferEncoding == "base64" =>
+                  // play bytestring payload seems to be in UTF-16BE, BodyParser converts to UTF string first,
+                  // which corrupts the string, use the ByteString bytes directly
+                  val str = new String(Base64.encode(resultBodyByteString.toArray, Base64.DEFAULT))
+                  eventModel.getResponse.setBody(str)
+                  eventModel.getResponse.setTransferEncoding(bodyWrapper.transferEncoding)
+                case Success(bodyWrapper) =>
+                  eventModel.getResponse.setBody(bodyWrapper.body)
+                  eventModel.getResponse.setTransferEncoding(bodyWrapper.transferEncoding)
+                case _ => eventModel.getResponse.setBody(utf8String)
+              }
+            }
           }
 
           Try {
