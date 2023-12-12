@@ -9,6 +9,7 @@ import com.moesif.api.http.response.HttpResponse
 import com.moesif.api.models._
 import com.moesif.api.{Base64, MoesifAPIClient, BodyParser => MoesifBodyParser}
 import play.api.Configuration
+import play.api.http.HttpEntity
 import play.api.inject.{SimpleModule, bind}
 import play.api.libs.streams.Accumulator
 import play.api.mvc.{EssentialAction, EssentialFilter, RequestHeader, Result}
@@ -95,62 +96,86 @@ class MoesifApiFilter @Inject()(config: MoesifApiFilterConfig)(implicit mat: Mat
           eventReqWithoutBody.build()
       }
 
+      var blockedModifiedResultOpt: Option[Result] = None
+
       accumulator.map { result =>
-        Try {
-          result.body.consumeData.map { resultBodyByteString =>
-            val resultHeaders = result.header.headers.asJava
-            val eventRspBuilder  = new EventResponseBuilder().time(new Date()).
-              status(result.header.status).
-              headers(resultHeaders)
-            val utf8String = resultBodyByteString.utf8String
+        val resultHeaders = result.header.headers.asJava
+        val eventRspBuilder = new EventResponseBuilder().time(new Date()).
+          status(result.header.status).
+          headers(resultHeaders)
 
-            Try(MoesifBodyParser.parseBody(resultHeaders, utf8String)) match {
-              case Success(bodyWrapper) if bodyWrapper.transferEncoding == "base64" =>
-                // play bytestring payload seems to be in UTF-16BE, BodyParser converts to UTF string first,
-                // which corrupts the string, use the ByteString bytes directly
-                val str = new String(Base64.encode(resultBodyByteString.toArray, Base64.DEFAULT))
-                eventRspBuilder.body(str).transferEncoding(bodyWrapper.transferEncoding)
-              case Success(bodyWrapper) =>
-                eventRspBuilder.body(bodyWrapper.body).transferEncoding(bodyWrapper.transferEncoding)
-              case _ =>  eventRspBuilder.body(utf8String)
-            }
+        result.body.consumeData.map { resultBodyByteString =>
+          val utf8String = resultBodyByteString.utf8String
 
-            val eventModelBuilder = new EventBuilder().
-              request(eventReqWithBody).
-              response(eventRspBuilder.build())
-            
-            val advancedConfig = MoesifAdvancedFilterConfiguration.getConfig().getOrElse{
-              MoesifAdvancedFilterConfiguration.getDefaultConfig()
-            }
-
-            if (!advancedConfig.skip(requestHeader, result)) {
-              advancedConfig.sessionToken(requestHeader, result).map { sessionToken =>
-                eventModelBuilder.sessionToken(sessionToken)
-              }
-
-              advancedConfig.identifyUser(requestHeader, result).map { userId =>
-                eventModelBuilder.userId(userId)
-              }
-
-              advancedConfig.identifyCompany(requestHeader, result).map { companyId =>
-                eventModelBuilder.companyId(companyId)
-              }
-
-              val metadata = advancedConfig.getMetadata(requestHeader, result)
-              if (metadata.nonEmpty) {
-                eventModelBuilder.metadata(metadata)
-              }
-
-              val eventModel = eventModelBuilder.build()
-              sendEvent(eventModel, advancedConfig)
-
-            }
+          Try(MoesifBodyParser.parseBody(resultHeaders, utf8String)) match {
+            case Success(bodyWrapper) if bodyWrapper.transferEncoding == "base64" =>
+              // play bytestring payload seems to be in UTF-16BE, BodyParser converts to UTF string first,
+              // which corrupts the string, use the ByteString bytes directly
+              val str = new String(Base64.encode(resultBodyByteString.toArray, Base64.DEFAULT))
+              eventRspBuilder.body(str).transferEncoding(bodyWrapper.transferEncoding)
+            case Success(bodyWrapper) =>
+              eventRspBuilder.body(bodyWrapper.body).transferEncoding(bodyWrapper.transferEncoding)
+            case _ => eventRspBuilder.body(utf8String)
           }
-        } match {
-          case Success(_) => Unit
-          case Failure(ex) => logger.log(Level.WARNING, s"failed to send API events to Moesif: ${ex.getMessage}", ex)
         }
-        result
+
+        val eventModelBuilder = new EventBuilder().
+          request(eventReqWithBody).
+          response(eventRspBuilder.build())
+
+        val advancedConfig = MoesifAdvancedFilterConfiguration.getConfig().getOrElse {
+          MoesifAdvancedFilterConfiguration.getDefaultConfig()
+        }
+
+        if (!advancedConfig.skip(requestHeader, result)) {
+          advancedConfig.sessionToken(requestHeader, result).map { sessionToken =>
+            eventModelBuilder.sessionToken(sessionToken)
+          }
+
+          advancedConfig.identifyUser(requestHeader, result).map { userId =>
+            eventModelBuilder.userId(userId)
+          }
+
+          advancedConfig.identifyCompany(requestHeader, result).map { companyId =>
+            eventModelBuilder.companyId(companyId)
+          }
+
+          val metadata = advancedConfig.getMetadata(requestHeader, result)
+          if (metadata.nonEmpty) {
+            eventModelBuilder.metadata(metadata)
+          }
+
+          val eventModel: EventModel = eventModelBuilder.build()
+
+          val blockResponse = moesifApi.getBlockedByGovernanceRulesResponse(eventModel)
+          if (blockResponse.isBlocked) {
+            logger.warning("Blocked by governance rules" + blockResponse.blockedBy)
+            eventModel.setBlockedBy(blockResponse.blockedBy)
+            eventModel.setResponse(blockResponse.response)
+
+            blockedModifiedResultOpt = Some(result.copy(
+              header = result.header.copy(
+                status = eventModel.getResponse.getStatus,
+                headers = eventModel.getResponse.getHeaders.asScala.toMap
+              ),
+              body = HttpEntity.Strict(ByteString(eventModel.getResponse.getBody.toString), result.body.contentType)
+            ))
+          }
+
+          Try {
+            sendEvent(eventModel, advancedConfig)
+          } match {
+            case Success(_) => Unit
+            case Failure(ex) => logger.log(Level.WARNING, s"failed to send API events to Moesif: ${ex.getMessage}", ex)
+          }
+        }
+
+        if (blockedModifiedResultOpt.isEmpty) {
+          result
+        }
+        else {
+          blockedModifiedResultOpt.get
+        }
       }
     }
   }
