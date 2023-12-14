@@ -29,6 +29,7 @@ import scala.util.{Failure, Random, Success, Try}
 class MoesifApiFilter @Inject()(config: MoesifApiFilterConfig)(implicit mat: Materializer) extends  EssentialFilter  {
   private val requestBodyParsingEnabled = config.requestBodyProcessingEnabled
   private val maxApiEventsToHoldInMemory = config.maxApiEventsToHoldInMemory
+  private val batchSize = config.batchSize
   private val maxBatchTime = config.maxBatchTime
   private var lastSendTime = System.currentTimeMillis()
   private val moesifApplicationId = config.moesifApplicationId
@@ -196,7 +197,7 @@ class MoesifApiFilter @Inject()(config: MoesifApiFilterConfig)(implicit mat: Mat
         if(eventModelBuffer.size >= maxApiEventsToHoldInMemory){
           logger.log(Level.WARNING, s"Skipped Event due to event buffer size [${eventModelBuffer.size}] is over max ApiEventsToHoldInMemory ${maxApiEventsToHoldInMemory}")
         }else{
-          eventModelBuffer += eventModelMasked
+          eventModelBuffer.append(eventModelMasked)
         }
       } else {
         if(debug) {
@@ -207,7 +208,7 @@ class MoesifApiFilter @Inject()(config: MoesifApiFilterConfig)(implicit mat: Mat
       // scheduledSend below should flush the event buffer after maxBatchTime; however, we check the time here and
       // send immediately if that didn't already happen and it's time to send
       // this also has the effect of sending immediately if we are sending fewer than one event per maxBatchTime
-      if (eventModelBuffer.size >= maxApiEventsToHoldInMemory || isAfterMaxBatchTime()) {
+      if (eventModelBuffer.size >= batchSize || isAfterMaxBatchTime()) {
         if(debug){
           logger.log(Level.INFO, s"flush events because of bucket full or time over maxBatchTime [${eventModelBuffer.size}/${maxApiEventsToHoldInMemory}] - [${System.currentTimeMillis() - lastSendTime}/${maxBatchTime}]")
         }
@@ -230,7 +231,7 @@ class MoesifApiFilter @Inject()(config: MoesifApiFilterConfig)(implicit mat: Mat
   def setScheduleBufferFlush(): Unit = {
     if (!isSendScheduled()) {
       if(debug){
-        logger.log(Level.WARNING, s"Scheduler is set for ${maxBatchTime} later...")
+        logger.log(Level.WARNING, s"Scheduler is set for ${maxBatchTime/1000} seconds later...")
       }
       scheduleBufferFlush()
     }
@@ -245,7 +246,7 @@ class MoesifApiFilter @Inject()(config: MoesifApiFilterConfig)(implicit mat: Mat
     }
   }
 
-    def flushEventBuffer(): Unit = synchronized {
+  def flushEventBuffer(): Unit = synchronized {
     if (eventModelBuffer.nonEmpty) {
       val flushSize = eventModelBuffer.size
       lastSendTime = System.currentTimeMillis()
@@ -256,24 +257,27 @@ class MoesifApiFilter @Inject()(config: MoesifApiFilterConfig)(implicit mat: Mat
             setScheduleBufferFlush()
           }
           else{
-            logger.log(Level.INFO, s"[Moesif] sent [${flushSize}/${maxApiEventsToHoldInMemory}] events successfully")
-            // if this was called while a scheduled send task was still live, cancel it because we just sent
-            cancelScheduleBufferFlush()
 
             try{
-              if (eventModelBuffer.nonEmpty) {
-                eventModelBuffer.remove(0, flushSize)
+              if (eventModelBuffer.size >= flushSize) {
+                eventModelBuffer.trimStart(flushSize)
+              } else {
+                eventModelBuffer.clear()
               }
             }
             catch {
               case ex: Exception =>
                 // logger.log(Level.WARNING, s"[Moesif] Error when remove flushed events [flushSize: ${flushSize}/${maxApiEventsToHoldInMemory}] [Current ArrayBuffer size after flushing: ${eventModelBuffer.size}] to Moesif: ${ex.getMessage}", ex)
             }
+            logger.log(Level.INFO, s"[Moesif] sent [${flushSize}/${batchSize}] events successfully | queue size: [${eventModelBuffer.size}/$maxApiEventsToHoldInMemory]")
+            // if this was called while a scheduled send task was still live, cancel it because we just sent
+            cancelScheduleBufferFlush()
+
             // TODO remove try exception after debugging on remove out of bounds issue
           }
         }
         def onFailure(context: HttpContext, ex: Throwable): Unit = {
-          logger.log(Level.WARNING, s"[Moesif] failed to send API events [flushSize: ${flushSize}/${maxApiEventsToHoldInMemory}] [ArrayBuffer size: ${eventModelBuffer.size}] to Moesif: ${ex.getMessage}", ex)
+          logger.log(Level.WARNING, s"[Moesif] failed to send API events [flushSize: ${flushSize}/${batchSize}] [ArrayBuffer size: ${eventModelBuffer.size}/${maxApiEventsToHoldInMemory}] to Moesif: ${ex.getMessage}", ex)
           setScheduleBufferFlush()
         }
       }
