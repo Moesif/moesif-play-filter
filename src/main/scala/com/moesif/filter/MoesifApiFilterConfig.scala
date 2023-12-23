@@ -13,7 +13,7 @@ import javax.inject.{Inject, Provider, Singleton}
   * @param maxBatchTime Int of the max time in milliseconds to buffer events before sending
   */
 case class MoesifApiFilterConfig(maxApiEventsToHoldInMemory: Int, batchSize: Int, moesifApplicationId: String, requestBodyProcessingEnabled: Boolean = true,
-                                 moesifCollectorEndpoint: String, maxBatchTime: Int = 2000, debug:Boolean = false)
+                                 moesifCollectorEndpoint: String, maxBatchTime: Int = 2000, useGzip:Boolean = false, debug:Boolean = false)
 object MoesifApiFilterConfig {
   def fromConfiguration(conf: Configuration): MoesifApiFilterConfig = {
     val config = conf.get[Configuration]("play.filters.moesifApiFilter")
@@ -24,7 +24,8 @@ object MoesifApiFilterConfig {
     val maxBatchTime = config.getOptional[Int]("maxBatchTime").getOrElse(2000)
     val moesifApplicationId = config.get[String]("moesifApplicationId")
     val moesifCollectorEndpoint = config.get[String]("collectorEndpoint")
-    MoesifApiFilterConfig(maxApiEventsToHoldInMemory, batchSize, moesifApplicationId, reqBodyProcessing, moesifCollectorEndpoint, maxBatchTime, debug)
+    val useGzip = config.getOptional[Boolean]("useGzip").getOrElse(false)
+    MoesifApiFilterConfig(maxApiEventsToHoldInMemory, batchSize, moesifApplicationId, reqBodyProcessing, moesifCollectorEndpoint, maxBatchTime, useGzip, debug)
   }
 }
 
