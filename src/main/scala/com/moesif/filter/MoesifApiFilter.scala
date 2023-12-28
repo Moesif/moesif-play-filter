@@ -264,6 +264,9 @@ class MoesifApiFilter @Inject()(config: MoesifApiFilterConfig)(implicit mat: Mat
       while(eventModelCache.nonEmpty){
         val sendingEvents: Seq[EventModel] = eventModelCache.take(batchSize)
         eventModelCache --= sendingEvents
+
+        val companyIds = sendingEvents.map(_.getCompanyId).distinct
+
         val callBack: APICallBack[HttpResponse] = new APICallBack[HttpResponse] {
           def onSuccess(context: HttpContext, response: HttpResponse): Unit = {
             if (context.getResponse.getStatusCode != 201) {
@@ -279,11 +282,13 @@ class MoesifApiFilter @Inject()(config: MoesifApiFilterConfig)(implicit mat: Mat
             }
           }
           def onFailure(context: HttpContext, ex: Throwable): Unit = {
-            logger.log(Level.WARNING, s"[Moesif] failed to send API events [flushSize: ${sendingEvents.size}/${batchSize}] [ArrayBuffer size: ${eventModelBuffer.size}/${maxApiEventsToHoldInMemory}] to Moesif: ${ex.getMessage}", ex)
+            logger.log(Level.WARNING, s"[Moesif] failed to send API events [flushSize: ${sendingEvents.size}/${batchSize}] [ArrayBuffer size: ${eventModelBuffer.size}/${maxApiEventsToHoldInMemory}] [company ids: ${companyIds}] to Moesif: ${ex.getMessage}", ex)
             addBackEvents(sendingEvents)
             setScheduleBufferFlush()
           }
         }
+
+        logger.log(Level.WARNING, s"[DEBUG] Company Ids in events: ${sendingEvents.map(_.getCompanyId)}")
 
         val events = sendingEvents.asJava
         moesifApi.createEventsBatchAsync(events, callBack, useGzip)
