@@ -288,8 +288,6 @@ class MoesifApiFilter @Inject()(config: MoesifApiFilterConfig)(implicit mat: Mat
           }
         }
 
-        logger.log(Level.WARNING, s"[DEBUG] Company Ids in events: ${sendingEvents.map(_.getCompanyId)}")
-
         val events = sendingEvents.asJava
         moesifApi.createEventsBatchAsync(events, callBack, useGzip)
       }
