@@ -265,7 +265,7 @@ class MoesifApiFilter @Inject()(config: MoesifApiFilterConfig)(implicit mat: Mat
         val sendingEvents: Seq[EventModel] = eventModelCache.take(batchSize)
         eventModelCache --= sendingEvents
 
-        val companyIds = sendingEvents.map(_.getCompanyId).distinct
+        val companyIds = Try(sendingEvents.map(_.getCompanyId).distinct.toString()).getOrElse("EMPTY COMPANY")
 
         val callBack: APICallBack[HttpResponse] = new APICallBack[HttpResponse] {
           def onSuccess(context: HttpContext, response: HttpResponse): Unit = {
