@@ -54,8 +54,7 @@ class MoesifApiFilter @Inject()(config: MoesifApiFilterConfig)(implicit mat: Mat
   private var scheduledSend: ScheduledFuture[_] = exec.schedule(eventBufferFlusher, 0, TimeUnit.MILLISECONDS)
 
   private val logger = Logger.getLogger("moesif.play.filter.MoesifApiFilter")
-  logger.info(s"config  is $config")
-
+  logger.log(Level.WARNING, s"MoesifApiFilter config is $config")
 
   def apply(nextFilter: EssentialAction) = new EssentialAction {
 
