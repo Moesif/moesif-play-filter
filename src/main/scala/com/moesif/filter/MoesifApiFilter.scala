@@ -282,6 +282,10 @@ class MoesifApiFilter @Inject()(config: MoesifApiFilterConfig)(implicit mat: Mat
             }
           }
           def onFailure(context: HttpContext, ex: Throwable): Unit = {
+            val eventmodelMsg = "sendingEvents: " + sendingEvents.map(logEventModelHelper).mkString(",")
+            if (debug) {
+              logger.log(Level.WARNING, eventmodelMsg)
+            }
             logger.log(Level.WARNING, s"[Moesif] failed to send API events [flushSize: ${sendingEvents.size}/${batchSize}] [ArrayBuffer size: ${eventModelBuffer.size}/${maxApiEventsToHoldInMemory}] [company ids: ${companyIds}] to Moesif: ${ex.getMessage}", ex)
             addBackEvents(sendingEvents)
             setScheduleBufferFlush()
@@ -292,6 +296,43 @@ class MoesifApiFilter @Inject()(config: MoesifApiFilterConfig)(implicit mat: Mat
         moesifApi.createEventsBatchAsync(events, callBack, useGzip)
       }
     }
+  }
+
+  def logEventModelHelper(event: EventModel): String = {
+    val request = Try(event.getRequest).getOrElse(null)
+    val response = Try(event.getResponse).getOrElse(null)
+    val sessionToken = Try(event.getSessionToken).getOrElse("")
+    val tags = Try(event.getTags).getOrElse("")
+    val userId = Try(event.getUserId).getOrElse("")
+    val companyId = Try(event.getCompanyId).getOrElse("")
+    val metadata = Try(event.getMetadata.toString).getOrElse("")
+    val direction = Try(event.getDirection).getOrElse("")
+
+    val requestStr = if(request == null) "" else
+      s"{time: ${Try(request.getTime).getOrElse("")} " +
+        s"| uri: ${Try(request.getUri).getOrElse("")} " +
+        s"| verb: ${Try(request.getVerb).getOrElse("")} " +
+        s"| headers: ${Try(request.getHeaders).getOrElse("")} " +
+        s"| body: ${Try(request.getBody).getOrElse("")} " +
+        s"| apiVersion: ${Try(request.getApiVersion).getOrElse("")} " +
+        s"| transferEncoding: ${Try(request.getTransferEncoding).getOrElse("")}}"
+
+    val responseStr = if(response == null) "" else
+      s"{time: ${Try(response.getTime).getOrElse("")} " +
+      s"| status: ${Try(response.getStatus).getOrElse("")} " +
+      s"| headers: ${Try(response.getHeaders).getOrElse("")} " +
+      s"| body: ${Try(response.getBody).getOrElse("")} " +
+      s"| transferEncoding: ${Try(response.getTransferEncoding).getOrElse("")} " +
+      s"| ipAddress: ${Try(response.getIpAddress).getOrElse("")}}"
+
+    s"{userId: $userId " +
+      s"| companyId: $companyId " +
+      s"| sessionToken: $sessionToken " +
+      s"| tags: $tags " +
+      s"| direction: $direction " +
+      s"| metadata: $metadata " +
+      s"| request: $requestStr}" +
+      s"| response: $responseStr}"
   }
 
   /**
