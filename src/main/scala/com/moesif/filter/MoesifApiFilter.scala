@@ -282,8 +282,8 @@ class MoesifApiFilter @Inject()(config: MoesifApiFilterConfig)(implicit mat: Mat
             }
           }
           def onFailure(context: HttpContext, ex: Throwable): Unit = {
-            val eventmodelMsg = "sendingEvents: " + sendingEvents.map(logEventModelHelper).mkString(",")
             if (debug) {
+              val eventmodelMsg = "sendingEvents: " + sendingEvents.map(logEventModelHelper).mkString(",")
               logger.log(Level.WARNING, eventmodelMsg)
             }
             logger.log(Level.WARNING, s"[Moesif] failed to send API events [flushSize: ${sendingEvents.size}/${batchSize}] [ArrayBuffer size: ${eventModelBuffer.size}/${maxApiEventsToHoldInMemory}] [company ids: ${companyIds}] to Moesif: ${ex.getMessage}", ex)
