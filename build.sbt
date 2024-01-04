@@ -7,7 +7,7 @@ assemblyJarName in assembly := "moesif-play-filter-1.0.jar"
 assemblyOption in assembly := (assemblyOption in assembly).value.copy(includeScala = false)
 
 // https://mvnrepository.com/artifact/com.moesif.api/moesifapi
-libraryDependencies += "com.moesif.api" % "moesifapi" % "1.7.7"
+libraryDependencies += "com.moesif.api" % "moesifapi" % "1.7.7-a"
 
 // https://mvnrepository.com/artifact/com.typesafe.play/play
 libraryDependencies += "com.typesafe.play" %% "play" % "2.6.23"
