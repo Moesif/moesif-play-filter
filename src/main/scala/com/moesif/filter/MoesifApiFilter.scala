@@ -36,7 +36,7 @@ class MoesifApiFilter @Inject()(config: MoesifApiFilterConfig)(implicit mat: Mat
   private val debug = config.debug
   private val moesifCollectorEndpoint = config.moesifCollectorEndpoint
   private val eventModelBuffer = mutable.ArrayBuffer[EventModel]()
-  private val client = new MoesifAPIClient(moesifApplicationId, moesifCollectorEndpoint)
+  private val client = new MoesifAPIClient(moesifApplicationId, moesifCollectorEndpoint, debug)
   private val moesifApi = client.getAPI
   private val useGzip = config.useGzip
 
@@ -292,7 +292,7 @@ class MoesifApiFilter @Inject()(config: MoesifApiFilterConfig)(implicit mat: Mat
         }
 
         val events = sendingEvents.asJava
-        moesifApi.createEventsBatchAsync(events, callBack, useGzip, debug)
+        moesifApi.createEventsBatchAsync(events, callBack, useGzip)
       }
     }
   }
