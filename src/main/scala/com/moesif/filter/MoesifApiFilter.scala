@@ -8,6 +8,7 @@ import com.moesif.api.http.client.{APICallBack, HttpContext}
 import com.moesif.api.http.response.HttpResponse
 import com.moesif.api.models._
 import com.moesif.api.{Base64, MoesifAPIClient, BodyParser => MoesifBodyParser}
+import org.apache.http.impl.client.DefaultHttpRequestRetryHandler
 import play.api.Configuration
 import play.api.http.HttpEntity
 import play.api.inject.{SimpleModule, bind}
@@ -39,6 +40,9 @@ class MoesifApiFilter @Inject()(config: MoesifApiFilterConfig)(implicit mat: Mat
   private val client = new MoesifAPIClient(moesifApplicationId, moesifCollectorEndpoint, debug)
   private val moesifApi = client.getAPI
   private val useGzip = config.useGzip
+
+  // Set http retry handler
+  moesifApi.setHttpRequestRetryHandler(new DefaultHttpRequestRetryHandler(3, true));
 
   val eventBufferFlusher: Runnable = new Runnable() {
     override def run(): Unit = {
