@@ -16,6 +16,7 @@ import play.api.libs.streams.Accumulator
 import play.api.mvc.{EssentialAction, EssentialFilter, RequestHeader, Result}
 
 import java.util.Date
+import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.{Executors, ScheduledExecutorService, ScheduledFuture, TimeUnit}
 import java.util.logging._
 import javax.inject.{Inject, Singleton}
@@ -40,6 +41,7 @@ class MoesifApiFilter @Inject()(config: MoesifApiFilterConfig)(implicit mat: Mat
   private val client = new MoesifAPIClient(moesifApplicationId, moesifCollectorEndpoint, debug)
   private val moesifApi = client.getAPI
   private val useGzip = config.useGzip
+  private val isFlushing = new AtomicLong(0)
 
   // Set http retry handler
   moesifApi.setHttpRequestRetryHandler(new DefaultHttpRequestRetryHandler(3, true));
@@ -188,8 +190,11 @@ class MoesifApiFilter @Inject()(config: MoesifApiFilterConfig)(implicit mat: Mat
     }
   }
 
+  def isReadyToFlush(): Boolean = {
+    isFlushing.get() == 0
+  }
 
-  def sendEvent(eventModel: EventModel, advancedConfig: MoesifAdvancedFilterConfiguration): Unit = synchronized {
+  def sendEvent(eventModel: EventModel, advancedConfig: MoesifAdvancedFilterConfiguration): Unit = {
       val randomPercentage = Math.random * 100
       val sampleRateToUse = moesifApi.getSampleRateToUse(eventModel)
 
@@ -212,7 +217,7 @@ class MoesifApiFilter @Inject()(config: MoesifApiFilterConfig)(implicit mat: Mat
       // scheduledSend below should flush the event buffer after maxBatchTime; however, we check the time here and
       // send immediately if that didn't already happen and it's time to send
       // this also has the effect of sending immediately if we are sending fewer than one event per maxBatchTime
-      if (eventModelBuffer.size >= batchSize || isAfterMaxBatchTime()) {
+      if ((eventModelBuffer.size >= batchSize || isAfterMaxBatchTime()) && isReadyToFlush()) {
         if(debug){
           logger.log(Level.INFO, s"[Moesif] flush events because of bucket full or time over maxBatchTime [${eventModelBuffer.size}/${maxApiEventsToHoldInMemory}] - [${System.currentTimeMillis() - lastSendTime}/${maxBatchTime}]")
         }
@@ -258,7 +263,9 @@ class MoesifApiFilter @Inject()(config: MoesifApiFilterConfig)(implicit mat: Mat
     }
   }
 
-  def flushEventBuffer(): Unit = synchronized {
+  def flushEventBuffer(): Unit = {
+    // flush is started, and set to current timestamp
+    isFlushing.getAndSet(System.currentTimeMillis())
     if (eventModelBuffer.nonEmpty) {
       val eventModelCache: mutable.ArrayBuffer[EventModel] = eventModelBuffer.clone()
       eventModelBuffer.clear()
@@ -283,6 +290,8 @@ class MoesifApiFilter @Inject()(config: MoesifApiFilterConfig)(implicit mat: Mat
               cancelScheduleBufferFlush()
               setScheduleBufferFlush()
             }
+            // flush is done, and reset it
+            isFlushing.getAndSet(0)
           }
           def onFailure(context: HttpContext, ex: Throwable): Unit = {
             if (debug) {
@@ -292,6 +301,8 @@ class MoesifApiFilter @Inject()(config: MoesifApiFilterConfig)(implicit mat: Mat
             logger.log(Level.WARNING, s"[Moesif] failed to send API events [flushSize: ${sendingEvents.size}/${batchSize}] [ArrayBuffer size: ${eventModelBuffer.size}/${maxApiEventsToHoldInMemory}] [company ids: ${companyIds}] to Moesif: ${ex.getMessage}", ex)
             addBackEvents(sendingEvents)
             setScheduleBufferFlush()
+            // flush is done, and reset it
+            isFlushing.getAndSet(0)
           }
         }
 
