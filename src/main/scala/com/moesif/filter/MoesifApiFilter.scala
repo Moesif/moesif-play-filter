@@ -7,7 +7,7 @@ import akka.util.ByteString
 import com.moesif.api.http.client.{APICallBack, HttpContext}
 import com.moesif.api.http.response.HttpResponse
 import com.moesif.api.models._
-import com.moesif.api.{Base64, MoesifAPIClient, BodyParser => MoesifBodyParser}
+import com.moesif.api.{APIHelper, Base64, MoesifAPIClient, BodyParser => MoesifBodyParser}
 import org.apache.http.impl.client.DefaultHttpRequestRetryHandler
 import play.api.Configuration
 import play.api.http.HttpEntity
@@ -21,7 +21,8 @@ import java.util.logging._
 import javax.inject.{Inject, Singleton}
 import scala.collection.JavaConverters._
 import scala.collection.mutable
-import scala.util.{Failure, Random, Success, Try}
+import scala.concurrent.ExecutionContext
+import scala.util.{Failure, Success, Try}
 /**
   * MoesifApiFilter
   * logs API calls and sends to Moesif for API analytics and log analysis.
@@ -29,7 +30,10 @@ import scala.util.{Failure, Random, Success, Try}
 @Singleton
 class MoesifApiFilter @Inject()(config: MoesifApiFilterConfig)(implicit mat: Materializer) extends  EssentialFilter  {
   private val requestBodyParsingEnabled = config.requestBodyProcessingEnabled
+  private val responseBodyParsingEnabled = config.responseBodyProcessingEnabled
   private val maxApiEventsToHoldInMemory = config.maxApiEventsToHoldInMemory
+  private val reqBodySizeLimit = config.reqBodySizeLimit
+  private val resBodySizeLimit = config.resBodySizeLimit
   private val batchSize = config.batchSize
   private val maxBatchTime = config.maxBatchTime
   private var lastSendTime = System.currentTimeMillis()
@@ -40,6 +44,7 @@ class MoesifApiFilter @Inject()(config: MoesifApiFilterConfig)(implicit mat: Mat
   private val client = new MoesifAPIClient(moesifApplicationId, moesifCollectorEndpoint, debug)
   private val moesifApi = client.getAPI
   private val useGzip = config.useGzip
+  private val maxBatchSize = config.maxBatchSize
 
   // Set http retry handler
   moesifApi.setHttpRequestRetryHandler(new DefaultHttpRequestRetryHandler(3, true));
@@ -93,10 +98,19 @@ class MoesifApiFilter @Inject()(config: MoesifApiFilterConfig)(implicit mat: Mat
       lazy val eventReqWithBody =  requestBodyBuffer.map(_.result()) match {
         case Some(buffer) if buffer.nonEmpty =>
           val requestBodyStr = new String(buffer)
+          val reqContentLength: Int = reqHeaders.entrySet().asScala
+            .find(entry => entry.getKey.equalsIgnoreCase("Content-Length"))
+            .map(entry => Try(entry.getValue.toInt).getOrElse(buffer.length))
+            .getOrElse(buffer.length)
+
           val reqBodyParsed = MoesifBodyParser.parseBody(reqHeaders, requestBodyStr)
-          eventReqWithoutBody.body(reqBodyParsed.body).
-            transferEncoding(reqBodyParsed.transferEncoding).
-            build()
+          if (reqContentLength < reqBodySizeLimit) {
+            eventReqWithoutBody.body(reqBodyParsed.body).
+              transferEncoding(reqBodyParsed.transferEncoding).
+              build()
+          } else {
+            eventReqWithoutBody.build()
+          }
         case _ =>
           eventReqWithoutBody.build()
       }
@@ -151,23 +165,29 @@ class MoesifApiFilter @Inject()(config: MoesifApiFilterConfig)(implicit mat: Mat
               body = HttpEntity.Strict(ByteString(eventModel.getResponse.getBody.toString), result.body.contentType)
             ))
           }
-          else{
+          else if (responseBodyParsingEnabled) {
             result.body.consumeData.map { resultBodyByteString =>
               val utf8String = resultBodyByteString.utf8String
+              val resContentLength: Int = resultHeaders.entrySet().asScala
+                .find(entry => entry.getKey.equalsIgnoreCase("Content-Length"))
+                .map(entry => Try(entry.getValue.toInt).getOrElse(utf8String.length))
+                .getOrElse(utf8String.length)
 
-              Try(MoesifBodyParser.parseBody(resultHeaders, utf8String)) match {
-                case Success(bodyWrapper) if bodyWrapper.transferEncoding == "base64" =>
-                  // play bytestring payload seems to be in UTF-16BE, BodyParser converts to UTF string first,
-                  // which corrupts the string, use the ByteString bytes directly
-                  val str = new String(Base64.encode(resultBodyByteString.toArray, Base64.DEFAULT))
-                  eventModel.getResponse.setBody(str)
-                  eventModel.getResponse.setTransferEncoding(bodyWrapper.transferEncoding)
-                case Success(bodyWrapper) =>
-                  eventModel.getResponse.setBody(bodyWrapper.body)
-                  eventModel.getResponse.setTransferEncoding(bodyWrapper.transferEncoding)
-                case _ => eventModel.getResponse.setBody(utf8String)
+              if (resContentLength < resBodySizeLimit) {
+                Try(MoesifBodyParser.parseBody(resultHeaders, utf8String)) match {
+                  case Success(bodyWrapper) if bodyWrapper.transferEncoding == "base64" =>
+                    // play bytestring payload seems to be in UTF-16BE, BodyParser converts to UTF string first,
+                    // which corrupts the string, use the ByteString bytes directly
+                    val str = new String(Base64.encode(resultBodyByteString.toArray, Base64.DEFAULT))
+                    eventModel.getResponse.setBody(str)
+                    eventModel.getResponse.setTransferEncoding(bodyWrapper.transferEncoding)
+                  case Success(bodyWrapper) =>
+                    eventModel.getResponse.setBody(bodyWrapper.body)
+                    eventModel.getResponse.setTransferEncoding(bodyWrapper.transferEncoding)
+                  case _ => eventModel.getResponse.setBody(utf8String)
+                }
               }
-            }
+            }(SameThreadExecutionContext)
           }
 
           Try {
@@ -188,6 +208,16 @@ class MoesifApiFilter @Inject()(config: MoesifApiFilterConfig)(implicit mat: Mat
     }
   }
 
+  object SameThreadExecutionContext extends ExecutionContext {
+    def execute(runnable: Runnable): Unit = runnable.run()
+    def reportFailure(cause: Throwable): Unit = {
+      logger.log(Level.WARNING, s"Same thread execution context failure in MoesifApiFilter: ${cause.getMessage}", cause)
+    }
+  }
+
+  def getEventBuffer() : Seq[EventModel] = synchronized {
+    eventModelBuffer.toSeq
+  }
 
   def sendEvent(eventModel: EventModel, advancedConfig: MoesifAdvancedFilterConfiguration): Unit = synchronized {
       val randomPercentage = Math.random * 100
@@ -198,7 +228,7 @@ class MoesifApiFilter @Inject()(config: MoesifApiFilterConfig)(implicit mat: Mat
       // Compare percentage to send event
       if (sampleRateToUse >= randomPercentage) {
         eventModelMasked.setWeight(math.floor(100 / sampleRateToUse).toInt) // note: sampleRateToUse cannot be 0 at this point
-        if(eventModelBuffer.size >= maxApiEventsToHoldInMemory){
+        if(eventModelBuffer.size >= maxApiEventsToHoldInMemory ) {
           logger.log(Level.WARNING, s"[Moesif] Skipped Event due to event buffer size [${eventModelBuffer.size}] is over max ApiEventsToHoldInMemory ${maxApiEventsToHoldInMemory}")
         }else{
           eventModelBuffer.append(eventModelMasked)
@@ -265,7 +295,13 @@ class MoesifApiFilter @Inject()(config: MoesifApiFilterConfig)(implicit mat: Mat
       lastSendTime = System.currentTimeMillis()
 
       while(eventModelCache.nonEmpty){
-        val sendingEvents: Seq[EventModel] = eventModelCache.take(batchSize)
+        var sendingEvents: Seq[EventModel] = eventModelCache.take(batchSize)
+        var sendingEventsSize = APIHelper.serialize(sendingEvents).getBytes.length
+        while (sendingEventsSize >= maxBatchSize && sendingEvents.size > 1) {
+          val reducedSize = sendingEvents.size * 0.9 // reduce the number of events by 10%
+          sendingEvents = eventModelCache.take(reducedSize.toInt)
+          sendingEventsSize = APIHelper.serialize(sendingEvents).getBytes.length
+        }
         eventModelCache --= sendingEvents
 
         val companyIds = Try(sendingEvents.map(_.getCompanyId).distinct.toString()).getOrElse("EMPTY COMPANY")
@@ -303,7 +339,6 @@ class MoesifApiFilter @Inject()(config: MoesifApiFilterConfig)(implicit mat: Mat
             setScheduleBufferFlush()
           }
         }
-
         val events = sendingEvents.asJava
         moesifApi.createEventsBatchAsync(events, callBack, useGzip)
       }

@@ -17,6 +17,12 @@ libraryDependencies += "com.typesafe.play" %% "play" % "2.6.23"
 libraryDependencies += "org.apache.logging.log4j" % "log4j-core" % "2.17.2"
 libraryDependencies += "org.apache.logging.log4j" % "log4j-api" % "2.17.2"
 
+libraryDependencies ++= Seq(
+  "org.scalatestplus.play" %% "scalatestplus-play" % "3.1.3" % Test,
+  "org.mockito" % "mockito-core" % "2.28.2" % Test,
+  "ch.qos.logback" % "logback-classic" % "1.2.3" % Test,
+  "org.slf4j" % "slf4j-api" % "1.7.30" % Test
+)
 
 assemblyExcludedJars in assembly := {
   val cp = (fullClasspath in assembly).value
@@ -40,3 +46,5 @@ developers += Developer("moesif", "Moesif API", "support@moesif.com", url("https
 
 scalaVersion := "2.12.20"
 crossScalaVersions := Seq("2.12.20", "2.11.8")
+
+Test / classLoaderLayeringStrategy := ClassLoaderLayeringStrategy.Flat
