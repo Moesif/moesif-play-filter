@@ -279,7 +279,7 @@ class MoesifApiFilter @Inject()(config: MoesifApiFilterConfig, errorHandler: Htt
           }(SameThreadExecutionContext)
         }
 
-        sendEvent(advancedConfig.maskContent(eventModel), advancedConfig)
+        sendEvent(eventModel, advancedConfig)
       }
     } match {
       case Failure(ex) => logger.log(Level.WARNING, s"failed to send error event to Moesif: ${ex.getMessage}", ex)
