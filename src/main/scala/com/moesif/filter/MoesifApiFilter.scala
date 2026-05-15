@@ -10,7 +10,7 @@ import com.moesif.api.models._
 import com.moesif.api.{APIHelper, Base64, MoesifAPIClient, BodyParser => MoesifBodyParser}
 import org.apache.http.impl.client.DefaultHttpRequestRetryHandler
 import play.api.Configuration
-import play.api.http.HttpEntity
+import play.api.http.{HttpEntity, HttpErrorHandler}
 import play.api.inject.{SimpleModule, bind}
 import play.api.libs.streams.Accumulator
 import play.api.mvc.{EssentialAction, EssentialFilter, RequestHeader, Result}
@@ -21,14 +21,20 @@ import java.util.logging._
 import javax.inject.{Inject, Singleton}
 import scala.collection.JavaConverters._
 import scala.collection.mutable
-import scala.concurrent.ExecutionContext
+import scala.concurrent.{ExecutionContext, Future}
 import scala.util.{Failure, Success, Try}
 /**
   * MoesifApiFilter
   * logs API calls and sends to Moesif for API analytics and log analysis.
   */
 @Singleton
-class MoesifApiFilter @Inject()(config: MoesifApiFilterConfig)(implicit mat: Materializer) extends  EssentialFilter  {
+class MoesifApiFilter @Inject()(config: MoesifApiFilterConfig, errorHandler: HttpErrorHandler)(implicit mat: Materializer) extends EssentialFilter {
+
+  // Secondary constructor for backwards compatibility with compile-time DI users
+  // Falls back to behaviour: errors are not captured by Moesif, AkkaHttpServer handles them.
+  def this(config: MoesifApiFilterConfig)(implicit mat: Materializer) =
+    this(config, MoesifApiFilter.NoopErrorHandler)(mat)
+
   private val requestBodyParsingEnabled = config.requestBodyProcessingEnabled
   private val responseBodyParsingEnabled = config.responseBodyProcessingEnabled
   private val maxApiEventsToHoldInMemory = config.maxApiEventsToHoldInMemory
@@ -205,6 +211,15 @@ class MoesifApiFilter @Inject()(config: MoesifApiFilterConfig)(implicit mat: Mat
           blockedModifiedResultOpt.get
         }
       }
+      .recoverWith { case e: Throwable =>
+        // When the action fails before producing a Result (e.g. downstream service failure: OpenSearch failure),
+        // Delegate to errorHandler to generate the error response and it will automatically capture from Moesif Play Filter
+        // Moesif then return it so the client and Moesif own management API receives the same response as normal
+        errorHandler.onServerError(requestHeader, e).map { result =>
+          captureErrorResult(requestHeader, eventReqWithBody, result)
+          result
+        }
+      }
     }
   }
 
@@ -212,6 +227,63 @@ class MoesifApiFilter @Inject()(config: MoesifApiFilterConfig)(implicit mat: Mat
     def execute(runnable: Runnable): Unit = runnable.run()
     def reportFailure(cause: Throwable): Unit = {
       logger.log(Level.WARNING, s"Same thread execution context failure in MoesifApiFilter: ${cause.getMessage}", cause)
+    }
+  }
+
+  private def captureErrorResult(requestHeader: RequestHeader, eventReq: EventRequestModel, result: Result): Unit = {
+    Try {
+      val resultHeaders = result.header.headers.asJava
+      val advancedConfig = MoesifAdvancedFilterConfiguration.getConfig()
+        .getOrElse(MoesifAdvancedFilterConfiguration.getDefaultConfig())
+
+      if (!advancedConfig.skip(requestHeader, result)) {
+        val eventModelBuilder = new EventBuilder()
+          .request(eventReq)
+          .response(
+            new EventResponseBuilder()
+              .time(new Date())
+              .status(result.header.status)
+              .headers(resultHeaders)
+              .build()
+          )
+
+        advancedConfig.sessionToken(requestHeader, result).foreach(eventModelBuilder.sessionToken)
+        advancedConfig.identifyUser(requestHeader, result).foreach(eventModelBuilder.userId)
+        advancedConfig.identifyCompany(requestHeader, result).foreach(eventModelBuilder.companyId)
+
+        val metadata = advancedConfig.getMetadata(requestHeader, result)
+        if (metadata.nonEmpty) eventModelBuilder.metadata(metadata)
+
+        val eventModel = eventModelBuilder.build()
+
+        if (responseBodyParsingEnabled) {
+          result.body.consumeData.map { resultBodyByteString =>
+            val utf8String = resultBodyByteString.utf8String
+            val resContentLength: Int = resultHeaders.entrySet().asScala
+              .find(entry => entry.getKey.equalsIgnoreCase("Content-Length"))
+              .map(entry => Try(entry.getValue.toInt).getOrElse(utf8String.length))
+              .getOrElse(utf8String.length)
+
+            if (resContentLength < resBodySizeLimit) {
+              Try(MoesifBodyParser.parseBody(resultHeaders, utf8String)) match {
+                case Success(bodyWrapper) if bodyWrapper.transferEncoding == "base64" =>
+                  val str = new String(Base64.encode(resultBodyByteString.toArray, Base64.DEFAULT))
+                  eventModel.getResponse.setBody(str)
+                  eventModel.getResponse.setTransferEncoding(bodyWrapper.transferEncoding)
+                case Success(bodyWrapper) =>
+                  eventModel.getResponse.setBody(bodyWrapper.body)
+                  eventModel.getResponse.setTransferEncoding(bodyWrapper.transferEncoding)
+                case _ => eventModel.getResponse.setBody(utf8String)
+              }
+            }
+          }(SameThreadExecutionContext)
+        }
+
+        sendEvent(eventModel, advancedConfig)
+      }
+    } match {
+      case Failure(ex) => logger.log(Level.WARNING, s"failed to send error event to Moesif: ${ex.getMessage}", ex)
+      case _ =>
     }
   }
 
@@ -441,7 +513,17 @@ trait MoesifApiFilterComponents {
   lazy val moesifApiFilter: MoesifApiFilter             = new MoesifApiFilter(moesifApiFilterConfig)(materializer)
 }
 
-object MoesifApiFilter{
+object MoesifApiFilter {
+
+  // Used by the secondary (no-arg errorHandler) constructor
+  // Re-throws the exception so AkkaHttpServer handles it
+  object NoopErrorHandler extends HttpErrorHandler {
+    override def onClientError(request: RequestHeader, statusCode: Int, message: String): Future[Result] =
+      Future.successful(play.api.mvc.Results.Status(statusCode))
+    override def onServerError(request: RequestHeader, exception: Throwable): Future[Result] =
+      Future.failed(exception)
+  }
+
   def buildUriHelper(host: String, uri: String, secure: Boolean): String = {
     if (uri.contains("://")) {
       uri
